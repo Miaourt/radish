@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.94"
 ctrlc = { version = "3.4.5", features = ["termination"] }
-http-body-util = "0.1.2"
-hyper = { version = "1.5.1", features = ["http1", "server"] }
+http = "1.2.0"
+httparse = "1.9.5"
 smol = "2.0.2"
-smol-hyper = "0.1.1"

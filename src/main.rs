@@ -1,37 +1,17 @@
 use anyhow::Result;
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::time::Duration;
 
-use http_body_util::Full;
-use hyper::{body::Bytes, server::conn::http1, service::Service, Request, Response};
 use smol::{
-    future, io,
+    future,
+    io::{self, AsyncReadExt},
     net::{SocketAddr, TcpListener, TcpStream},
     stream::StreamExt,
     Timer,
 };
-use smol_hyper::rt::{FuturesIo, SmolTimer};
 
 enum Events {
     Termination,
     Request(io::Result<(TcpStream, SocketAddr)>),
-}
-
-async fn hello(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-    Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
-}
-
-#[derive(Debug)]
-struct Cache {
-    source: String,
-}
-
-impl Service<Request<hyper::body::Incoming>> for Cache {
-    type Response = Response<Full<Bytes>>;
-    type Error = Infallible;
-    type Future = future::Ready<Result<Self::Response, Self::Error>>;
-    fn call(&self, _: Request<hyper::body::Incoming>) -> Self::Future {
-        future::ready(Ok(Response::new(Full::new(Bytes::from("Hello, World!")))))
-    }
 }
 
 fn main() -> Result<()> {
@@ -48,10 +28,6 @@ fn main() -> Result<()> {
         let listener = TcpListener::bind(addr).await.unwrap();
         println!("Listening to http://{}", addr);
 
-        let cache = Arc::new(Cache {
-            source: "".to_string(),
-        });
-
         loop {
             let termination_fut = async {
                 termination_chan.recv().await.unwrap();
@@ -64,17 +40,23 @@ fn main() -> Result<()> {
 
             let msg = future::or(termination_fut, req_receiver).await;
             match msg {
-                Events::Request(Ok((stream, addr))) => {
-                    let conn = http1::Builder::new()
-                        .timer(SmolTimer::new())
-                        .serve_connection(FuturesIo::new(stream), cache.clone());
-
+                Events::Request(Ok((mut stream, addr))) => {
                     ex.spawn(async move {
                         println!("serving... {}", addr);
-                        if let Err(e) = conn.await {
-                            eprintln!("Error serving connection: {:?}", e);
+
+                        let mut buf = [0; 4096];
+                        let mut headers = [httparse::EMPTY_HEADER; 64];
+                        let mut req = httparse::Request::new(&mut headers);
+
+                        let bytes_read = stream.read(&mut buf).await.unwrap();
+
+                        match req.parse(&buf[..bytes_read]) {
+                            Ok(_) => {
+                                println!("{:?}", req);
+                            }
+                            Err(e) => println!("Failed to parse: {}", e),
                         }
-                        Timer::after(Duration::from_secs(5)).await;
+
                         println!("served ! {}", addr);
                     })
                     .detach();
